@@ -1,0 +1,275 @@
+---
+title: "Differential Gene Expression for validation and new cohort"
+author: "Roshan Shafiha"
+date: "6/13/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(dev = "png",
+                      dpi = 300,
+                      echo = TRUE,
+                      cache = TRUE)
+```
+
+## R Markdown
+
+load the libraries 
+
+```{r}
+
+library(limma)
+library(ggplot2)
+library(GEOquery)
+library(tidyverse)
+library(corrplot)
+library(dplyr)
+
+```
+
+load the file
+
+```{r}
+
+data<-read.csv("features.csv",header = T,row.names = 1)
+
+data$sample[data$sample=="CTRL"]<-"control"
+
+head(data[,1:10])
+
+data_2<-data[,-1]
+ 
+summary(t(data_2[1:10,1:10]))
+
+boxplot(t(data_2))
+
+```
+
+preprocess and conduct PCA labelled according to the sample type
+
+```{r}
+groups<- data$sample
+
+data_prepca<-data[,-c(1)]
+
+pca <- prcomp(data_prepca, center = TRUE,scale. = TRUE)
+```
+
+PCA
+
+```{r}
+df_out <- as.data.frame(pca$x)
+df_out$Sample <- data$sample
+
+percentage <- round(pca$sdev / sum(pca$sdev) * 100, 2)
+percentage <- paste( colnames(df_out), "(", paste( as.character(percentage), "%", ")", sep="") )
+
+
+
+theme<-theme(panel.background = element_blank(),text = element_text(size = 20),plot.title = element_text(hjust = 0.5),panel.border=element_rect(fill=NA),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),strip.background=element_blank(),axis.text.x=element_text(colour="black"),axis.text.y=element_text(colour="black"),axis.ticks=element_line(colour="black"),plot.margin=unit(c(1,1,1,1),"line"))
+
+plot_PCA<-ggplot(df_out,aes(x=PC1,y=PC2,color=Sample ))
+plot_PCA<-plot_PCA+geom_point(shape=19, size=5)+theme+ xlab(percentage[1]) + ylab(percentage[2])+ggtitle("PCA plot of GEO dataset")+scale_color_brewer(palette="Set1")
+
+
+print(plot_PCA)
+```
+
+
+Do differential gene expression analysis on the batch corrected data 
+
+```{r}
+
+expression_data1<-t(data_prepca)
+
+design1 <- model.matrix(~0+data$sample,ref="control")
+
+colnames(design1) <- c("Normal","Steatosis")
+
+fit_data1 <- lmFit(expression_data1, design1)
+
+
+contrasts1 <- makeContrasts(Steatosis - Normal, levels=design1)
+
+fit2_data1 <- contrasts.fit(fit_data1, contrasts1)
+
+fit2_data1<- eBayes(fit2_data1)
+
+full_results1 <- topTable(fit2_data1, number=Inf,adjust = "BH")
+
+full_results1 <- cbind(symbols = rownames(full_results1), full_results1)
+
+rownames(full_results1) <- 1:nrow(full_results1)
+
+
+```
+
+
+Get the significant genes
+
+```{r}
+
+sign_genes1<-full_results1 %>% filter(full_results1$adj.P.Val < 0.05)
+
+
+upregulated_genes_validationset <- sign_genes1 %>% filter(sign_genes1$logFC > 0)
+
+
+downregulated_genes_validationset <- sign_genes1 %>% filter(sign_genes1$logFC < 0)
+
+
+```
+
+
+extract the significant genes .
+
+```{r}
+
+feature<-sign_genes1$symbols
+
+dataset<-t(expression_data1)
+
+dataset_significant<-dataset[,colnames(dataset) %in% feature]
+
+dataset_significant<-as.data.frame(dataset_significant)
+
+dataset_significant <- add_column(dataset_significant, sample=data$sample, .before = 1) 
+
+```
+
+
+load the validation data
+
+```{r}
+
+data3 <- getGEO('GSE33814')
+gse3 <- data3[[1]]
+feature<-data3[["GSE33814_series_matrix.txt.gz"]]@featureData@data
+expression_data3 <- as.data.frame(exprs(gse3))
+rownames(expression_data3) <- make.names(feature$Symbol ,unique = T) 
+
+boxplot(expression_data3)
+summary(expression_data3[,1:10])
+```
+
+preprocess the data
+
+```{r}
+
+sampleInfo_3 <- pData(gse3)
+
+sampleInfo3 <- select(sampleInfo_3,characteristics_ch1.1,geo_accession)
+
+sampleInfo3<-sampleInfo3 %>% filter(characteristics_ch1.1=="diagnosis: steatosis"|characteristics_ch1.1=="diagnosis: normal")
+
+sampleInfo3$characteristics_ch1.1<- gsub(sampleInfo3$characteristics_ch1.1, pattern = "diagnosis: ", replacement = "")
+
+
+steatosis_control<-rownames(sampleInfo3)
+
+expression_data3<-expression_data3[ , (names(expression_data3) %in% steatosis_control)]
+
+```
+
+
+Conduct differential gene expression 
+
+```{r}
+
+
+design2 <- model.matrix(~0+sampleInfo3$characteristics_ch1.1,ref="normal")
+
+
+colnames(design2) <- c("Normal","Steatosis")
+
+fit_data2 <- lmFit(expression_data3, design2)
+
+
+contrasts2 <- makeContrasts(Steatosis - Normal, levels=design2)
+
+fit2_data2<- contrasts.fit(fit_data2, contrasts2)
+
+fit2_data2<- eBayes(fit2_data2)
+
+full_results2 <- topTable(fit2_data2, number=Inf, adjust = "BH")
+
+full_results2 <- cbind(symbols = rownames(full_results2), full_results2)
+
+rownames(full_results2) <- 1:nrow(full_results2)
+
+
+```
+
+extract the significant genes from the dataset 
+
+```{r}
+sign_genes2<-full_results2 %>% filter(full_results2$adj.P.Val < 0.05 )
+
+
+GSE33814_upregulated<- sign_genes2 %>% filter(sign_genes2$logFC > 0)
+
+GSE33814_downregulated <-sign_genes2 %>% filter(sign_genes2$logFC < 0 )
+
+
+```
+
+find the intersecting genes between training and validation set
+
+```{r}
+genes_1<-sign_genes1$symbols
+genes_2<-sign_genes2$symbols
+
+genes_2<-gsub("\\.[0-9]*$", "", genes_2)
+
+genes_common<-intersect(genes_1,genes_2)
+
+print(genes_common)
+```
+
+Extract those genes from the new cohort 
+
+```{r}
+
+dataset<-data[,names(data) %in% genes_common]
+
+dataset<-as.data.frame(dataset)
+
+dataset<-add_column(dataset,sample = data$sample , .before = 1)
+
+write.csv(dataset,"dataset_model.csv")
+
+head(dataset)
+
+```
+
+view the upregulated and downregulated gene 
+
+```{r}
+genes_common_up<-intersect(upregulated_genes_validationset$symbols,GSE33814_upregulated$symbols)
+
+genes_common_down <- intersect(downregulated_genes_validationset$symbols,GSE33814_downregulated$symbols)
+
+```
+
+Extract those genes from the validation cohort 
+
+```{r}
+
+validation<-t(expression_data3)
+
+validation<-validation[,colnames(validation) %in% genes_common]
+
+validation<-as.data.frame(validation)
+
+validation<-add_column(validation, sample=sampleInfo3$characteristics_ch1.1, .before = 1) 
+
+head(validation[,1:10])
+
+
+#write.csv(validation,'validation.csv')
+```
+
+
