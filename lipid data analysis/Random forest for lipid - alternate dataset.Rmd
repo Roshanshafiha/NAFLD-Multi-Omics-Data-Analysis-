@@ -1,0 +1,382 @@
+---
+title: "Random Forest Lipid -2"
+author: "Roshan Shafiha"
+date: "6/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(dev = "png",
+                      dpi = 300,
+                      echo = TRUE,
+                      cache = TRUE)
+```
+
+## Random Forest
+
+Now the datasets would be exchanged to test and validate the model.
+
+Train & Test set - Dataset 2  (Fenland data) 
+
+Validation set - Dataset 1 (Italian cohort) 
+
+load the libraries 
+
+```{r,message=FALSE}
+
+library(randomForest)
+library(caret)
+library(e1071)
+library(alookr)
+library(dplyr)
+library(pROC)
+library(ggplot2)
+library(ggpubr)
+library(ggsignif)
+library(enrichR)
+library(DT)
+library(corrplot)
+library(dplyr)
+library(tibble)
+
+```
+
+Load the data
+
+```{r }
+
+clinical<-read.csv("clinical_data_significant.csv",header = T,row.names = 1)
+
+data<-read.csv("lipid_data_significant.csv",header = T,row.names = 1)
+
+data<-as.data.frame(t(data))
+
+data<-add_column(data, sample=clinical$NAFLD, .before = 1)
+
+head(data)
+
+summary(data[,2:ncol(data)])
+
+```
+
+
+lets load the validation set 
+
+```{r}
+validation_lipid<-as.data.frame(read.csv("validation_lipid.csv",header = T,row.names = 1))
+
+validation_lipid<-as.data.frame(scale(t(validation_lipid)))
+
+validation_clinical<-read.csv("validation_clinical.csv",header = T,row.names = 1)
+
+all(rownames(validation_lipid) == validation_clinical$ID)
+
+validation_lipid<-add_column(validation_lipid,sample=validation_clinical$steatosis,.before = 1)
+
+validation_lipid$sample[validation_lipid$sample == 1] <- "steatosis1"
+
+validation_lipid$sample[validation_lipid$sample == 0] <- "steatosis0"
+
+
+#extract the columns of the data present in the validation set 
+
+data<-data[,colnames(data) %in% colnames(validation_lipid)]
+
+head(data)
+
+```
+
+
+lets alternate the train and validate sample. Dataset 2 becomes the train set and Dataset 1 becomes the test set. 
+
+```{r}
+data_train<-validation_lipid
+
+validation<-data
+
+head(data_train)
+
+head(validation)
+```
+
+
+
+
+
+lets split the dataset
+
+```{r}
+sb <- data_train %>%
+  split_by(sample, seed = 6534)
+
+attr_names <- names(attributes(sb))
+
+sb_attr <- attributes(sb)
+
+summary(sb)
+
+```
+
+
+extract the train and the test
+
+```{r}
+train <- sb %>%
+  extract_set(set = "train")
+
+test <- sb %>%
+  extract_set(set = "test")
+
+table(train$sample)
+
+
+```
+
+
+## stratified k fold cross validation 
+
+
+```{r}
+
+folds <- 5
+
+cvIndex <- createFolds(factor(train$sample), folds, returnTrain = T)
+
+tc <- trainControl(index = cvIndex,
+               method = 'cv', 
+               number = folds,
+               summaryFunction=twoClassSummary,
+               classProbs=TRUE)
+
+
+
+```
+
+
+## Parameters optimization
+
+
+set initial values and try to optimize the model
+
+```{r}
+set.seed(1234)
+
+#Run the model
+
+rf_default <- train(sample~.,
+                    data = train,
+                    method = "rf",
+                    metric = "ROC",
+                    trControl = tc)
+
+# Print the results
+
+print(rf_default)
+```
+
+
+
+lets obtain the best mtry value 
+
+```{r}
+
+set.seed(1234)
+
+tuneGrid <- expand.grid(.mtry = c(1: 15))
+
+rf_mtry <- train(sample~.,
+                 data = train,
+                 method = "rf",
+                 metric = "ROC",
+                 tuneGrid = tuneGrid,
+                 trControl = tc,
+                 importance = TRUE,
+                 nodesize = 14,
+                 ntree = 50)
+print(rf_mtry)
+
+```
+
+
+```{r}
+#store the mtry to compare it with the other variable which we are going to 
+
+best_mtry <- rf_mtry$bestTune$mtry 
+
+print(best_mtry)
+```
+
+
+next lets train the maxnodes
+
+```{r}
+set.seed(1234)
+
+store_maxnode <- list()
+tuneGrid <- expand.grid(.mtry = best_mtry)
+for (maxnodes in c(5:15)) {
+  set.seed(1234)
+  rf_maxnode <- train(sample~.,
+                      data = train,
+                      method = "rf",
+                      metric = "ROC",
+                      tuneGrid = tuneGrid,
+                      trControl = tc,
+                      importance = TRUE,
+                      nodesize = 14,
+                      maxnodes = maxnodes,
+                      ntree = 50)
+  current_iteration <- toString(maxnodes)
+  store_maxnode[[current_iteration]] <- rf_maxnode
+}
+results_mtry <- resamples(store_maxnode)
+
+summary(results_mtry)
+
+```
+
+lets try increasing the node and see if there is any change.
+
+```{r}
+
+set.seed(1234)
+
+store_maxnode <- list()
+tuneGrid <- expand.grid(.mtry = best_mtry)
+for (maxnodes in c(20: 30)) {
+  set.seed(1234)
+  rf_maxnode <- train(sample~.,
+                      data = train,
+                      method = "rf",
+                      metric = "ROC",
+                      tuneGrid = tuneGrid,
+                      trControl = tc,
+                      importance = TRUE,
+                      nodesize = 14,
+                      maxnodes = maxnodes,
+                      ntree = 50)
+  key <- toString(maxnodes)
+  store_maxnode[[key]] <- rf_maxnode
+}
+results_node <- resamples(store_maxnode)
+
+summary(results_node)
+
+
+```
+
+
+max trees
+
+```{r}
+set.seed(1234)
+
+store_maxtrees <- list()
+for (ntree in c(10,15,20,25,30,35,40,45,50,55,100,150,200,250, 300,350,400)) {
+  set.seed(5678)
+  rf_maxtrees <- train(sample~.,
+                       data = train,
+                       method = "rf",
+                       metric = "ROC",
+                       tuneGrid = tuneGrid,
+                       trControl = tc,
+                       importance = TRUE,
+                       nodesize = 14,
+                       maxnodes = 5,
+                       ntree = ntree)
+  key <- toString(ntree)
+  store_maxtrees[[key]] <- rf_maxtrees
+}
+
+results_tree <- resamples(store_maxtrees)
+
+summary(results_tree)
+```
+## Optimized model
+
+```{r}
+set.seed(1234)
+
+fit_rf <- train(sample~.,
+                data= train,
+                method = "rf",
+                metric = "ROC",
+                tuneGrid = tuneGrid,
+                trControl = tc,
+                importance = TRUE,
+                nodesize = 14,
+                ntree = 45,
+                maxnodes = 6)
+
+print(fit_rf$bestTune)
+```
+
+## Test the model
+
+Test set
+
+```{r}
+set.seed(1234)
+
+probs_test <- predict(fit_rf,test,type="prob")
+
+test$sample = as.factor(test$sample)
+
+gbm.ROC_test<- roc(predictor=probs_test$steatosis1,
+                  response=test$sample)
+
+table(test$sample)
+
+print(gbm.ROC_test[["auc"]])
+
+```
+
+## Validate the model
+
+Validation set 
+
+```{r}
+set.seed(1234)
+
+probs_val <- predict(fit_rf,validation,type="prob")
+
+validation$sample=as.factor(validation$sample)
+
+gbm.ROC_val<- roc(predictor=probs_val$steatosis1,
+               response=validation$sample)
+
+table(validation$sample)
+
+print(gbm.ROC_val[["auc"]])
+
+```
+
+## Plot the ROC-AUC curve
+
+plot the curve 
+
+```{r}
+plot(gbm.ROC_test,col ="darkred",main="Random Forest ROC curve",
+     col.lab="black", cex.lab=1.5)
+text(x = 0.5274354,y = 0.7476923,label="AUC:0.74",cex=1)
+
+plot(gbm.ROC_val,col ="darkgreen",add=T)
+text(x = 0.7445764,y =0.8701577,label="AUC:0.76",cex=1)
+
+legend(x = "bottomright", 
+       c('Test-No.S0:190,No.S1:67','Validation-No.S0:120,No.S1:21','No.S0-Number of steatosis0',
+         'No.S1-Number of steatosis1'),lty=c(1,1),
+       lwd=c(2,2),col=c('darkred','darkgreen','white','white'))
+
+
+```
+
+session information
+
+```{r}
+sessionInfo()
+```
+
