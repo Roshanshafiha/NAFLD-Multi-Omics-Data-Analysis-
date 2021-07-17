@@ -1,0 +1,236 @@
+---
+title: "lipid feature study"
+author: "Roshan Shafiha"
+date: "7/17/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(dev = "png",
+                      dpi = 300,
+                      echo = TRUE,
+                      cache = TRUE)
+```
+
+load the library
+
+```{r}
+library("ComplexHeatmap")
+library("tidyverse")
+library("qgraph")
+library("ggplot2")
+library("ggpubr")
+```
+
+
+
+
+## R Markdown
+
+
+Random forest feature study - lipid dataset 1 
+
+```{r}
+#load the dataset 1
+
+clinical_data<-read.csv("dataset1_metadata.csv",header = T,row.names = 1)
+
+lipid_data<-read.csv("dataset1.csv",header = T,row.names = 1)
+
+head(lipid_data)
+
+```
+
+
+## Non-paramteric test
+
+perform wilcoxon test on the significant lipids
+
+```{r}
+number.of.samples<-ncol(lipid_data)
+
+# Create a output
+
+p.value.vector <- c()
+
+# Assign it to a list
+
+p.value.list <- numeric(number.of.samples)
+
+# Add the sample type and preprocess the dataframe
+
+lipid_data<-as.data.frame(cbind(lipid_data,group=clinical_data$NAFLD))
+
+lipid_steatosis0<-lipid_data[lipid_data$group=="steatosis0", ]
+
+lipid_steatosis1<-lipid_data[lipid_data$group=="steatosis1", ]
+
+lipid_steatosis0<-t(lipid_steatosis0)
+
+lipid_steatosis1<-t(lipid_steatosis1)
+
+input.combined.b <- cbind(lipid_steatosis0[,1:120],lipid_steatosis1[,1:21])
+
+input.combined.b<-as.data.frame(input.combined.b)
+
+input.combined.b<-input.combined.b[-8,]
+
+input.combined.b = data.frame(lapply(input.combined.b, function(x) as.numeric(as.character(x))),check.names=F, row.names = rownames(input.combined.b))
+
+
+# Establishing variable with number of observations
+number.of.samples <-nrow(input.combined.b)
+
+
+# Establishing vector with number of observations
+vector.number.of.samples <-1:number.of.samples
+```
+
+
+```{r}
+for (i in vector.number.of.samples) {
+  steatosis0 <- unlist(input.combined.b[i, 1:120])
+  steatosis1 <- unlist(input.combined.b[i, 121:141])
+  wilcox.test.i <- wilcox.test(steatosis0, steatosis1,
+                               mu=0,
+                               alt="two.sided",
+                               paired=F,
+                               conf.int=F,
+                               conf.level=0.95,
+                               exact=F
+  )
+  p.value.list[i] <- wilcox.test.i["p.value"]
+}
+
+
+```
+
+
+create a dataframe 
+
+```{r}
+#lipid list names to make a summary
+
+lipid.list.df <- paste(rownames(input.combined.b) )
+
+lipid.list.df<-as.data.frame(lipid.list.df)
+p.value<- data.frame(matrix(unlist(p.value.list ), nrow=length(p.value.list ), byrow=TRUE))
+
+colnames(p.value)<-"p.value"
+
+#binding lipid list and pvalue to create summary list
+
+wilcox.test.results <- cbind(lipid.list.df, p.value)
+
+print(wilcox.test.results)
+
+print(wilcox.test.results$lipid.list.df)
+
+```
+
+
+visualize the p values from wilxocon test
+
+```{r}
+bar_graph<-ggplot(data=wilcox.test.results, aes(x=lipid.list.df, y=-log10(p.value))) +
+  geom_bar(stat="identity", fill="steelblue")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+ 
+#theme_minimal()
+
+bar_graph
+
+```
+
+
+Order the clinical data 
+
+```{r}
+clinical_data_boxplot<-clinical_data[match(colnames(input.combined.b), clinical_data$sample_ID),]
+
+boxplot_data<-t(input.combined.b)
+
+boxplot_data<-as.data.frame(boxplot_data)
+
+boxplot_data<-add_column(boxplot_data, samples = clinical_data_boxplot$NAFLD, .before = 1)
+
+head(boxplot_data)
+
+```
+
+create a boxplot for visualizing the difference between the steatosis-0 and steatosis-1 samples.
+
+
+```{r}
+
+boxplot_data$samples=as.factor(boxplot_data$samples)
+
+my_lipid_list <- c("CE_16.0","Cholesterol","DG_36.2","TG_52.2","TG_52.3","TG_53.2","TG_54.2")
+
+my_plot_list <- vector(mode = "list", length = 11)
+
+for (i in 1:11) {
+  my_comparisons <- list( c("steatosis0", "steatosis1") )
+  p <-ggboxplot(boxplot_data, x = "samples", y = my_lipid_list[i],
+          color = "samples", palette = "jco",add = "jitter")+
+          theme(axis.text=element_text(size=12,face="bold"),
+          axis.title=element_text(size=16,face="bold"))+
+          stat_compare_means(label.y = 16,size=5)
+  my_plot_list[[i]] <- p
+}
+ 
+print(my_plot_list[1:7])
+
+
+```
+
+## Visualization - Heatmap 
+
+create complex heatmap with all the samples in a single plot 
+
+```{r}
+
+
+ht1 = Heatmap(input.combined.b[,1:120], name = "steatosis0", row_title = "", column_title = "steatosis0")
+ht2 = Heatmap(input.combined.b[121:141], name = "steatosis1", row_title = "", column_title = "steatosis1")
+ht_list = ht1 + ht2
+
+draw(ht_list, row_title = "Lipids", row_title_gp = gpar(col = "black"),
+     column_title = "Comparison between steatosis0 and steatosis1", column_title_side = "bottom")
+
+```
+
+lets create a correlation network
+
+```{r}
+set.seed(111)
+
+Data2<-t(input.combined.b)
+
+corMat <- cor(Data2) # Correlate data
+
+head(corMat)
+```
+
+plot the graph
+
+```{r}
+Groups <- c("Cholesteryl ester","Cholesterol","Diacylglycerol",rep("Triacylglycerol",4))
+
+Graph_pcor <- qgraph(corMat, graph = "pcor", layout = "spring",theme = "colorblind", threshold = "BH",
+                     sampleSize = nrow(Data2), alpha = 0.05,groups=Groups,
+                     legend.cex = 0.55, vsize = 10,
+                    esize = 15, borders = T,label.fill.vertical=0.3,
+                    label.scale=T,edge.labels=T,edge.label.bg=T,repulsion=0.35)
+```
+
+
+
+
+
+
