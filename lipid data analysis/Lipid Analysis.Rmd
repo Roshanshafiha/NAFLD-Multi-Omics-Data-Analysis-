@@ -1,0 +1,570 @@
+---
+title: "Lipid Analysis"
+author: "Roshan Shafiha"
+date: "6/13/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(dev = "png",
+                      dpi = 300,
+                      echo = TRUE,
+                      cache = TRUE)
+```
+
+## R Markdown
+
+load the libraries 
+
+```{r cars}
+
+library("readxl")
+library("tidyverse")
+library("rstatix")
+library("DESeq2")
+library("EnhancedVolcano")
+library("ggplot2")
+library("pmp")
+library("ggpubr")
+library("limma")
+```
+
+## Dataset-1 
+
+load the files and assign them to respective variable names.
+
+```{r}
+lipid <-as.data.frame(read_excel("italian cohort lipid study.xlsx",sheet = 2)) 
+
+lipid<-lipid[-1,-277]
+
+clinical_data<-lipid[,1:4]
+
+lipid_data<-lipid[,5:ncol(lipid)]
+
+annotations <- as.data.frame(read_excel("annotations.xlsx",col_names =T))
+
+colnames(lipid_data)<-make.unique(annotations$lipid)
+
+rownames(lipid_data)<-clinical_data$sample_ID
+
+lipid_data<-as.data.frame(lipid_data)
+
+summary(lipid_data[,1:10])
+
+table(clinical_data$NAFLD)
+
+```
+
+scale the data 
+
+```{r}
+lipid_scaled<-scale(lipid_data)
+
+summary(lipid_scaled[,1:10])
+```
+
+conduct PCA analysis 
+
+```{r}
+
+res_pca_1<-prcomp(lipid_scaled,centre=T,scale=F)
+
+res_pca <- as.data.frame(res_pca_1$x)
+
+res_pca$steatosis<-clinical_data$NAFLD
+
+res_pca$sample<-clinical_data$sample_ID
+
+
+theme<-theme(panel.background = element_blank(),panel.border=element_rect(fill=NA),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),strip.background=element_blank(),axis.text.x=element_text(colour="black"),axis.text.y=element_text(colour="black"),axis.ticks=element_line(colour="black"),plot.margin=unit(c(1,1,1,1),"line"))
+
+
+percentage <- round(res_pca_1$sdev / sum(res_pca_1$sdev) * 100, 2)
+percentage <- paste( colnames(res_pca), "(", paste( as.character(percentage), "%", ")", sep="") )
+
+
+plot1<-ggplot(res_pca,aes(x=PC1,y=PC2,label= sample,color=steatosis ))
+
+plot1<-plot1+geom_point(size=4)+theme+ xlab(percentage[1]) + ylab(percentage[2])
+
+print(plot1)
+
+```
+
+rename the sample in clinical data 
+
+```{r}
+clinical_data$NAFLD[clinical_data$NAFLD==0]<-"steatosis0"
+
+clinical_data$NAFLD[clinical_data$NAFLD==1]<-"steatosis1"
+
+head(clinical_data)
+
+```
+
+Extract the steatosis 0 and steatosis 1 sample separately 
+
+```{r}
+
+clinical_data_steatosis0<-subset(clinical_data, NAFLD=="steatosis0",select=sample_ID:sex)
+
+clinical_data_steatosis1<-subset(clinical_data, NAFLD=="steatosis1",select=sample_ID:sex)
+
+head(clinical_data_steatosis1)
+
+head(clinical_data_steatosis0)
+
+```
+
+
+lets see how many steatosis0 and steatosis1 samples are present 
+
+```{r}
+nrow(clinical_data_steatosis0)
+
+nrow(clinical_data_steatosis1)
+
+```
+
+There are more steatosis0 than steatosis 1 , hence lets conduct differential expression of lipid analysis between these two groups by subseting the samples into separate batches.
+
+create 6 batches of distinct (without sample replacement of steatosis0) and conduct differential expression of lipid for each batch of steatosis0 and steatosis1 such as (20 vs 21) and identify the repeatedly arising significant gene between them. 
+
+Lets create 6 batches
+
+```{r}
+
+rownames(clinical_data_steatosis0)<-1:120
+
+batch1_clinical_data_steatosis0<-clinical_data_steatosis0[1:20,]
+  
+batch2_clinical_data_steatosis0<-clinical_data_steatosis0[21:40,]
+
+batch3_clinical_data_steatosis0<-clinical_data_steatosis0[41:60,]
+
+batch4_clinical_data_steatosis0<-clinical_data_steatosis0[61:80,]
+
+batch5_clinical_data_steatosis0<-clinical_data_steatosis0[81:100,]
+
+batch6_clinical_data_steatosis0<-clinical_data_steatosis0[101:120,]
+
+```
+
+
+now create the clinical data for those 6 batches by merging clinical batch of steatosis0 and steatosis1 
+
+```{r}
+batch1_clinical_data<-rbind(batch1_clinical_data_steatosis0,clinical_data_steatosis1)
+
+batch2_clinical_data<-rbind(batch2_clinical_data_steatosis0,clinical_data_steatosis1)
+
+batch3_clinical_data<-rbind(batch3_clinical_data_steatosis0,clinical_data_steatosis1)
+
+batch4_clinical_data<-rbind(batch4_clinical_data_steatosis0,clinical_data_steatosis1)
+
+batch5_clinical_data<-rbind(batch5_clinical_data_steatosis0,clinical_data_steatosis1)
+
+batch6_clinical_data<-rbind(batch6_clinical_data_steatosis0,clinical_data_steatosis1)
+
+```
+
+
+extract the expression data for each of the batches now
+
+```{r}
+
+batch1_lipid_scaled<-lipid_scaled[rownames(lipid_scaled) %in% batch1_clinical_data$sample_ID,]
+
+batch2_lipid_scaled<-lipid_scaled[rownames(lipid_scaled) %in% batch2_clinical_data$sample_ID,]
+
+batch3_lipid_scaled<-lipid_scaled[rownames(lipid_scaled) %in% batch3_clinical_data$sample_ID,]
+
+batch4_lipid_scaled<-lipid_scaled[rownames(lipid_scaled) %in% batch4_clinical_data$sample_ID,]
+
+batch5_lipid_scaled<-lipid_scaled[rownames(lipid_scaled) %in% batch5_clinical_data$sample_ID,]
+
+batch6_lipid_scaled<-lipid_scaled[rownames(lipid_scaled) %in% batch6_clinical_data$sample_ID,]
+
+
+```
+
+## Differential lipid analysis
+
+conduct differential lipid expression analysis for batch-1 
+
+```{r}
+
+design_batch1 <- model.matrix(~0+batch1_clinical_data$NAFLD,ref="steatosis0")
+
+colnames(design_batch1) <- c("Steatosis0","Steatosis1")
+
+lipid_data_limma1<-t(batch1_lipid_scaled)
+
+fit_data1 <- lmFit(lipid_data_limma1, design_batch1)
+
+contrasts1 <- makeContrasts(Steatosis1 - Steatosis0, levels=design_batch1)
+
+fit2_data1 <- contrasts.fit(fit_data1, contrasts1)
+
+fit2_data1<- eBayes(fit2_data1)
+
+full_results1 <- topTable(fit2_data1, number=Inf,adjust = "BH")
+
+full_results1 <- cbind(symbols = rownames(full_results1), full_results1)
+
+rownames(full_results1) <- 1:nrow(full_results1)
+
+```
+
+lets view the plot for batch 1 and extract the significant genes of them 
+
+```{r}
+
+p_cutoff <- 0.05
+fc_cutoff <- 1
+topN <-10
+
+full_results1 %>% 
+  mutate(Significant = adj.P.Val < p_cutoff, abs(logFC) > fc_cutoff ) %>% 
+  mutate(Rank = 1:n(), Label = ifelse(Rank < topN,symbols,"")) %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), col=Significant,label=Label)) + geom_point() + geom_text_repel(col="black")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+significant_batch1<-full_results1[full_results1$adj.P.Val<p_cutoff,]
+
+head(significant_batch1)
+
+dim(significant_batch1)
+
+```
+conduct differential lipid expression analysis for batch-2
+
+```{r}
+
+design_batch2 <- model.matrix(~0+batch2_clinical_data$NAFLD,ref="steatosis0")
+
+colnames(design_batch2) <- c("Steatosis0","Steatosis1")
+
+lipid_data_limma2<-t(batch2_lipid_scaled)
+
+fit_data2 <- lmFit(lipid_data_limma2, design_batch2)
+
+contrasts2 <- makeContrasts(Steatosis1 - Steatosis0, levels=design_batch2)
+
+fit2_data2 <- contrasts.fit(fit_data2, contrasts2)
+
+fit2_data2<- eBayes(fit2_data2)
+
+full_results2 <- topTable(fit2_data2, number=Inf,adjust = "BH")
+
+full_results2 <- cbind(symbols = rownames(full_results2), full_results2)
+
+rownames(full_results2) <- 1:nrow(full_results2)
+
+```
+
+
+volcano plot for batch 2 
+
+```{r}
+full_results2 %>% 
+  mutate(Significant = adj.P.Val < p_cutoff, abs(logFC) > fc_cutoff ) %>% 
+  mutate(Rank = 1:n(), Label = ifelse(Rank < topN,symbols,"")) %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), col=Significant,label=Label)) + geom_point() + geom_text_repel(col="black")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+significant_batch2<-full_results2[full_results2$adj.P.Val<p_cutoff,]
+
+head(significant_batch2)
+
+dim(significant_batch2)
+```
+
+conduct differential lipid expression for batch 3 
+
+```{r}
+
+design_batch3 <- model.matrix(~0+batch3_clinical_data$NAFLD,ref="steatosis0")
+
+colnames(design_batch3) <- c("Steatosis0","Steatosis1")
+
+lipid_data_limma3<-t(batch3_lipid_scaled)
+
+fit_data3 <- lmFit(lipid_data_limma3, design_batch3)
+
+contrasts3 <- makeContrasts(Steatosis1 - Steatosis0, levels=design_batch3)
+
+fit2_data3 <- contrasts.fit(fit_data3, contrasts3)
+
+fit2_data3<- eBayes(fit2_data3)
+
+full_results3 <- topTable(fit2_data3, number=Inf,adjust = "BH")
+
+full_results3 <- cbind(symbols = rownames(full_results3), full_results3)
+
+rownames(full_results3) <- 1:nrow(full_results3)
+
+
+```
+
+
+volcano plot for batch 3 
+
+```{r}
+
+full_results3 %>% 
+  mutate(Significant = adj.P.Val < p_cutoff, abs(logFC) > fc_cutoff ) %>% 
+  mutate(Rank = 1:n(), Label = ifelse(Rank < topN,symbols,"")) %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), col=Significant,label=Label)) + geom_point() + geom_text_repel(col="black")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+significant_batch3<-full_results2[full_results3$adj.P.Val<p_cutoff,]
+
+head(significant_batch3)
+
+dim(significant_batch3)
+
+```
+
+conduct differential lipid expression for batch 4.
+
+```{r}
+design_batch4 <- model.matrix(~0+batch4_clinical_data$NAFLD,ref="steatosis0")
+
+colnames(design_batch4) <- c("Steatosis0","Steatosis1")
+
+lipid_data_limma4<-t(batch4_lipid_scaled)
+
+fit_data4 <- lmFit(lipid_data_limma4, design_batch4)
+
+contrasts4 <- makeContrasts(Steatosis1 - Steatosis0, levels=design_batch4)
+
+fit2_data4 <- contrasts.fit(fit_data4, contrasts4)
+
+fit2_data4<- eBayes(fit2_data4)
+
+full_results4 <- topTable(fit2_data4, number=Inf,adjust = "BH")
+
+full_results4 <- cbind(symbols = rownames(full_results4), full_results4)
+
+rownames(full_results4) <- 1:nrow(full_results4)
+
+```
+
+
+volcano plot for batch 4 
+
+```{r}
+
+full_results4 %>% 
+  mutate(Significant = adj.P.Val < p_cutoff, abs(logFC) > fc_cutoff ) %>% 
+  mutate(Rank = 1:n(), Label = ifelse(Rank < topN,symbols,"")) %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), col=Significant,label=Label)) + geom_point() + geom_text_repel(col="black")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+significant_batch4<-full_results4[full_results4$adj.P.Val<p_cutoff,]
+
+head(significant_batch4)
+
+dim(significant_batch4)
+
+
+
+
+```
+
+Conduct differential lipid expression for batch 5
+
+```{r}
+
+design_batch5 <- model.matrix(~0+batch5_clinical_data$NAFLD,ref="steatosis0")
+
+colnames(design_batch5) <- c("Steatosis0","Steatosis1")
+
+lipid_data_limma5<-t(batch5_lipid_scaled)
+
+fit_data5 <- lmFit(lipid_data_limma5, design_batch5)
+
+contrasts5 <- makeContrasts(Steatosis1 - Steatosis0, levels=design_batch5)
+
+fit2_data5 <- contrasts.fit(fit_data5, contrasts5)
+
+fit2_data5<- eBayes(fit2_data5)
+
+full_results5 <- topTable(fit2_data5, number=Inf,adjust = "BH")
+
+full_results5 <- cbind(symbols = rownames(full_results5), full_results5)
+
+rownames(full_results5) <- 1:nrow(full_results5)
+
+```
+
+
+volcano plot for batch 5 
+
+```{r}
+
+full_results5 %>% 
+  mutate(Significant = adj.P.Val < p_cutoff, abs(logFC) > fc_cutoff ) %>% 
+  mutate(Rank = 1:n(), Label = ifelse(Rank < topN,symbols,"")) %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), col=Significant,label=Label)) + geom_point() + geom_text_repel(col="black")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+significant_batch5<-full_results5[full_results5$adj.P.Val<p_cutoff,]
+
+head(significant_batch5)
+
+dim(significant_batch5)
+
+```
+
+Conduct different lipid expression for batch 6
+
+```{r}
+
+design_batch6 <- model.matrix(~0+batch6_clinical_data$NAFLD,ref="steatosis0")
+
+colnames(design_batch6) <- c("Steatosis0","Steatosis1")
+
+lipid_data_limma6<-t(batch6_lipid_scaled)
+
+fit_data6 <- lmFit(lipid_data_limma6, design_batch6)
+
+contrasts6 <- makeContrasts(Steatosis1 - Steatosis0, levels=design_batch6)
+
+fit2_data6 <- contrasts.fit(fit_data6, contrasts6)
+
+fit2_data6 <- eBayes(fit2_data6)
+
+full_results6 <- topTable(fit2_data6, number=Inf,adjust = "BH")
+
+full_results6 <- cbind(symbols = rownames(full_results6), full_results6)
+
+rownames(full_results6) <- 1:nrow(full_results6)
+
+
+```
+
+
+volcano plot for batch 6 
+
+```{r}
+
+full_results6 %>% 
+  mutate(Significant = adj.P.Val < p_cutoff, abs(logFC) > fc_cutoff ) %>% 
+  mutate(Rank = 1:n(), Label = ifelse(Rank < topN,symbols,"")) %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), col=Significant,label=Label)) + geom_point() + geom_text_repel(col="black")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+significant_batch6<-full_results6[full_results6$adj.P.Val<p_cutoff,]
+
+head(significant_batch6)
+
+dim(significant_batch6)
+
+```
+
+Find the intersecting significant lipids among the 6 batches
+
+```{r}
+
+lipids_batch1<-significant_batch1$symbols
+
+lipids_batch2<-significant_batch2$symbols
+
+lipids_batch3<-significant_batch3$symbols
+
+lipids_batch4<-significant_batch4$symbols
+
+lipids_batch5<-significant_batch5$symbols
+
+lipids_batch6<-significant_batch6$symbols
+
+
+
+intersected_lipids<-Reduce(intersect,list(lipids_batch1,lipids_batch2,lipids_batch3,lipids_batch4,lipids_batch5,lipids_batch6))
+
+print(intersected_lipids)
+
+```
+
+
+
+conduct different expression of lipid only with the intersected lipids 
+
+```{r}
+
+common_lipid_scaled<-lipid_scaled[,colnames(lipid_scaled) %in% intersected_lipids]
+
+design_final <- model.matrix(~0+clinical_data$NAFLD,ref="steatosis0")
+
+colnames(design_final) <- c("Steatosis1","Steatosis0")
+
+lipid_data_limma_final<-t(common_lipid_scaled)
+
+fit_data_final <- lmFit(lipid_data_limma_final, design_final)
+
+contrasts_final <- makeContrasts(Steatosis1 - Steatosis0, levels=design_final)
+
+fit2_data_final <- contrasts.fit(fit_data_final, contrasts_final)
+
+fit2_data_final<- eBayes(fit2_data_final)
+
+full_results_final <- topTable(fit2_data_final, number=Inf,adjust = "BH")
+
+full_results_final <- cbind(symbols = rownames(full_results_final), full_results_final)
+
+rownames(full_results_final) <- 1:nrow(full_results_final)
+
+print(full_results_final)
+
+```
+
+visualize
+
+```{r}
+
+full_results_final %>% 
+  mutate(Significant = adj.P.Val < p_cutoff, abs(logFC) > fc_cutoff ) %>% 
+  mutate(Rank = 1:n(), Label = ifelse(Rank < topN,symbols,"")) %>% 
+  ggplot(aes(x = logFC, y = -log10(P.Value), col=Significant,label=Label)) + geom_point() + geom_text_repel(col="black")+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+significant_final<-full_results_final[full_results_final$adj.P.Val<p_cutoff,]
+
+head(significant_final)
+
+dim(significant_final)
+
+
+
+```
+
+lets observe the -log10(P.value) of the significant lipids with a plot
+
+```{r}
+graph<-ggplot(data=significant_final, aes(x=symbols, y=-log10(P.Value))) +
+  geom_bar(stat="identity", fill="steelblue")+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+graph
+```
+
+
+observe the lipids logFC of the lipid
+
+```{r}
+
+graph_FC<-ggplot(data=significant_final, aes(x=symbols, y=logFC)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+graph_FC
+
+```
+
+
